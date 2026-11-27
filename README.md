@@ -87,7 +87,9 @@ src/
 │   └── ui/                    # shadcn/ui primitives (button, textarea, input, label, alert, form-field)
 ├── hooks/
 │   ├── useChat.ts             # Messages, sending, streaming and stop logic
-│   └── useInitRepository.ts   # Explicit feature create + init run (no auto-start)
+│   ├── useRepositories.ts     # GET /api/repositories for the signed-in session
+│   ├── useInitRepository.ts   # Subscribe to shared init tracking for one repo
+│   └── useCreateFeature.ts    # Explicit New Feature (POST /api/features)
 ├── services/
 │   ├── chatService.ts         # ChatService interface (the contract)
 │   ├── apiChatService.ts      # Real implementation: POST /api/chat (default)
@@ -95,8 +97,9 @@ src/
 │   ├── index.ts               # ← chooses which implementation the app uses
 │   ├── authService.ts         # /api/auth/*: current user, email-code sign-in, sign-out
 │   ├── userService.ts         # POST /api/users
-│   ├── repositoryService.ts   # POST /api/repositories
-│   └── initService.ts         # POST /api/features, POST /api/agents/init/run
+│   ├── repositoryService.ts   # GET|POST /api/repositories
+│   ├── initService.ts         # POST /api/features, POST /api/agents/init/run, GET status
+│   └── initRunTracker.ts      # One poll loop per repo; shared by list + details
 ├── types/                     # chat.ts (Message, StreamChunk), repository.ts
 └── lib/                       # config, cn(), http (JSON client), validation
 ```
@@ -142,23 +145,27 @@ label above the reply.
 
 ## Repository onboarding
 
-| Route               | Screen                                                               |
-| ------------------- | -------------------------------------------------------------------- |
-| `/`                 | Chat (unchanged)                                                     |
-| `/register`         | Register: first name, last name, email, ShipAI username              |
-| `/repositories/new` | Add Repository: repository URL, GitHub username, masked GitHub token |
-| `/repositories/:id` | Repository details with the explicit **Init Repository** button      |
+| Route               | Screen                                                                                     |
+| ------------------- | ------------------------------------------------------------------------------------------ |
+| `/`                 | Chat (unchanged)                                                                           |
+| `/register`         | Register: first name, last name, email, ShipAI username                                    |
+| `/repositories`     | List: name opens details; per-row **Initialize** / status                                  |
+| `/repositories/new` | Add Repository: repository URL, GitHub username, masked GitHub token                       |
+| `/repositories/:id` | Details (from list by id): init status, **Init Repository**, **New Feature** after success |
 
-| Call                                        | Sent when                      | Notes                                                                                           |
-| ------------------------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------- |
-| `POST /api/users`                           | Register                       | `201` profile, `409` email or username in use                                                   |
-| `POST /api/repositories`                    | Add Repository                 | `github_password` is the token field. `201` returns `id`, then the UI opens `/repositories/:id` |
-| `POST /api/features` `{username, repo_url}` | Click on Init Repository, only (if no feature is already associated) | `201 {feature_id}`: created on the Platform Backend (port 8000). Retries reuse the same ID |
-| `POST /api/agents/init/run` `{feature_id, project:{repo_url}, dry_run:true}` | Click on Init Repository, only | Expected `202 {runId, status:"running"}`. Route is not in the local OpenAPI yet (live 404) |
+| Call                                                                         | Sent when                                                  | Notes                                                                                           |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `POST /api/users`                                                            | Register                                                   | `201` profile, `409` email or username in use                                                   |
+| `GET /api/repositories`                                                      | Repositories list / details by id                          | Session cookie; no init status on each row                                                      |
+| `POST /api/repositories`                                                     | Add Repository                                             | `github_password` is the token field. `201` returns `id`, then the UI opens `/repositories/:id` |
+| `POST /api/features` `{username, repo_url}`                                  | Init (bootstrap, if needed) or **New Feature** on details  | `201 {feature_id, username, repo_url, created_at}`. Init retries reuse the bootstrap ID         |
+| `POST /api/agents/init/run` `{feature_id, project:{repo_url}, dry_run:false}` | Initialize on the list or **Init Repository** on details  | `202 {runId, status:"running"}` via the Platform Backend (port 8000). Completion reads `result.output` (`branch`, `commit`, `pushed`) |
+| `GET /api/agents/init/runs/{runId}`                                          | After a `202`, while a screen still subscribes to that run | Platform status for that run. Completion is shown only from this route                          |
 
 Registration, adding a repository and opening the details screen never start initialization.
-The token lives only in the Add Repository form and the request body; it is cleared on
-success and is not put in navigation state, storage or logs.
+Initialize on the list and Init Repository on details share one in-memory tracker per repository
+(at most one poll loop). The token lives only in the Add Repository form and the request body;
+it is cleared on success and is not put in navigation state, storage or logs.
 
 ### Sign-in and session
 
@@ -180,13 +187,20 @@ or stores a token and learns who is signed in only from `GET /api/auth/me` (`Aut
 These contracts do not exist in `backend/` or `shipAI_Generic_Agent/`, so the UI handles them
 explicitly instead of faking them:
 
-- **Repository lookup.** There is no `GET /api/repositories/{id}`. The details screen uses the
-  creation response passed in navigation state (it survives a reload; a direct visit shows an
-  explanation).
-- **Ownership checks.** `/api/repositories` now requires the session and checks `username` against
-  it. `/api/features` and `/api/tasks` still do not check who is calling.
-- **Init agent run.** `POST /api/agents/init/run` is not in the local Platform Backend OpenAPI yet
-  (live requests return 404). The UI still posts the documented payload and treats `202` as
-  started only. There is no verified status endpoint for that run id, so completion is not claimed.
-  The older Generic Agent `GET /api/init/{runId}` is not reused.
+- **Repository lookup by id.** There is no `GET /api/repositories/{id}`. Details load the selected
+  repository from `GET /api/repositories` by matching the route id (and still accept navigation
+  state right after Add Repository for a faster first paint).
+- **Repository-level initialization status.** `RepositoryOut` has no init field, and there is no
+  "latest/active init run for this repository" endpoint. **New Feature** is shown only after a
+  successful init tracked in the current browser session; a full reload cannot re-confirm
+  eligibility from the server.
+- **Active run discovery.** Init runs are addressable only by `runId`
+  (`GET /api/agents/init/runs/{runId}`). Reopening a screen resumes an in-memory `started` run;
+  after a full reload the UI cannot find an in-flight run without a new API.
+- **Ownership checks.** `/api/repositories` requires the session and checks `username` against it.
+  `/api/features` and `/api/tasks` still do not check who is calling.
+- **Init agent process.** `POST /api/agents/init/run` is forwarded by the Platform Backend to the
+  INIT agent (`INIT_AGENT_URL`, default port 3000). Status is polled at
+  `GET /api/agents/init/runs/{runId}` on the Platform API, not the older Generic Agent
+  `GET /api/init/{runId}` path (different Vite proxy target).
 - **CORS.** `backend/` allows only `http://localhost:4200`, so use the Vite proxy in development.

@@ -6,8 +6,9 @@ import { defineConfig } from 'vite'
 /**
  * Paths are forwarded unchanged (no prefix rewrite). The first matching key wins, so the
  * specific `/api/init` entry must stay above the `/api` catch-all.
- *  - `/api/init`: Generic Agent API (INIT agent), port 3000.
- *  - `/api` (chat, users, repositories): port 8000.
+ *  - `/api/init`: Generic Agent API (direct INIT agent), port 3000 — legacy / chat-adjacent.
+ *  - `/api` (users, repositories, features, `/api/agents/...`): Platform Backend, port 8000.
+ *    Init from Repository Details uses `/api/agents/init/*` on this catch-all, not `/api/init`.
  */
 const API_PROXY = {
   '/api/init': {

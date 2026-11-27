@@ -15,7 +15,10 @@ export interface RegisterInput {
   username: string
 }
 
-/** Response of `POST /api/repositories`. The backend never returns the GitHub token. */
+/**
+ * `RepositoryOut` from `GET|POST /api/repositories`. The backend never returns the GitHub token.
+ * There is no branch field on this schema.
+ */
 export interface Repository {
   id: number
   user_id: string
@@ -23,6 +26,12 @@ export interface Repository {
   github_user: string
   repo_url: string
   created_at: string
+}
+
+/** Response of `GET /api/repositories`. Repositories are oldest first; keep that order in the UI. */
+export interface RepositoriesList {
+  username: string
+  repositories: Repository[]
 }
 
 export interface AddRepositoryInput {

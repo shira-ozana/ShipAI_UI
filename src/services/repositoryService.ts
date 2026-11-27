@@ -1,6 +1,6 @@
 import { PLATFORM_API_URL } from '@/lib/config'
-import { ApiError, postJson, unexpectedStatus } from '@/lib/http'
-import type { AddRepositoryInput, Repository } from '@/types/repository'
+import { ApiError, getJson, postJson, unexpectedStatus } from '@/lib/http'
+import type { AddRepositoryInput, RepositoriesList, Repository } from '@/types/repository'
 
 const REPOSITORIES_URL = `${PLATFORM_API_URL}/api/repositories`
 
@@ -12,6 +12,38 @@ function isRepository(value: unknown): value is Repository {
     ['user_id', 'username', 'github_user', 'repo_url', 'created_at'].every(
       (key) => typeof body[key] === 'string',
     )
+  )
+}
+
+function isRepositoriesList(value: unknown): value is RepositoriesList {
+  if (typeof value !== 'object' || value === null) return false
+  const body = value as Record<string, unknown>
+  return (
+    typeof body.username === 'string' &&
+    Array.isArray(body.repositories) &&
+    body.repositories.every(isRepository)
+  )
+}
+
+/**
+ * `GET /api/repositories`. Session cookie identifies the user; no username parameter.
+ * Resolves with the signed-in user's repositories (oldest first) on `200`.
+ */
+export async function listRepositories(signal?: AbortSignal): Promise<RepositoriesList> {
+  const response = await getJson(REPOSITORIES_URL, signal)
+
+  if (response.status === 200) {
+    if (!isRepositoriesList(response.body)) {
+      throw new ApiError('The backend sent a response the app could not understand.', 200)
+    }
+    return response.body
+  }
+  if (response.status === 401) {
+    throw unexpectedStatus(response, 'Your session has expired. Sign in again.')
+  }
+  throw unexpectedStatus(
+    response,
+    `Couldn't load repositories (HTTP ${response.status}). Please try again.`,
   )
 }
 

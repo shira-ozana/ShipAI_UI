@@ -21,3 +21,18 @@ export function isGithubRepoUrl(value: string): boolean {
   const segments = url.pathname.split('/').filter(Boolean)
   return segments.length === 2 && segments.every((s) => /^[\w.-]+$/.test(s))
 }
+
+/** `owner/repo` from a GitHub URL, or the original string when it cannot be parsed. */
+export function githubRepoLabel(repoUrl: string): string {
+  try {
+    const url = new URL(repoUrl)
+    const segments = url.pathname.split('/').filter(Boolean)
+    if (segments.length >= 2) {
+      const repo = segments[1].replace(/\.git$/i, '')
+      return `${segments[0]}/${repo}`
+    }
+  } catch {
+    // Fall through to the raw URL.
+  }
+  return repoUrl
+}

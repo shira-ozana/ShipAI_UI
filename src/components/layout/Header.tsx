@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Chat' },
+  { to: '/repositories', label: 'Repositories' },
   { to: '/repositories/new', label: 'Add repository' },
 ]
 
