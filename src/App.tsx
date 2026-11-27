@@ -1,44 +1,24 @@
-import { useRef } from 'react'
-import { ChatInput } from '@/components/chat/ChatInput'
-import { EmptyState } from '@/components/chat/EmptyState'
-import { MessageList } from '@/components/chat/MessageList'
-import { ChatLayout } from '@/components/layout/ChatLayout'
-import { useChat } from '@/hooks/useChat'
-import { isMockService } from '@/services'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
+import { AuthProvider } from '@/context/AuthProvider'
+import AddRepositoryPage from '@/pages/AddRepositoryPage'
+import ChatPage from '@/pages/ChatPage'
+import RegisterPage from '@/pages/RegisterPage'
+import RepositoryDetailsPage from '@/pages/RepositoryDetailsPage'
+import SignInPage from '@/pages/SignInPage'
 
 export default function App() {
-  const { messages, draft, setDraft, isStreaming, send, stop } = useChat()
-  const inputRef = useRef<HTMLTextAreaElement>(null)
-
-  function handleSuggestion(prompt: string) {
-    setDraft(prompt)
-    const el = inputRef.current
-    if (el) {
-      el.focus()
-      // Put the caret at the end so the user can keep typing.
-      requestAnimationFrame(() => el.setSelectionRange(prompt.length, prompt.length))
-    }
-  }
-
   return (
-    <ChatLayout
-      isMock={isMockService}
-      footer={
-        <ChatInput
-          value={draft}
-          onChange={setDraft}
-          onSend={() => send()}
-          onStop={stop}
-          isStreaming={isStreaming}
-          textareaRef={inputRef}
-        />
-      }
-    >
-      {messages.length === 0 ? (
-        <EmptyState onSelectSuggestion={handleSuggestion} />
-      ) : (
-        <MessageList messages={messages} />
-      )}
-    </ChatLayout>
+    <BrowserRouter>
+      <AuthProvider>
+        <Routes>
+          <Route path="/" element={<ChatPage />} />
+          <Route path="/register" element={<RegisterPage />} />
+          <Route path="/sign-in" element={<SignInPage />} />
+          <Route path="/repositories/new" element={<AddRepositoryPage />} />
+          <Route path="/repositories/:id" element={<RepositoryDetailsPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </AuthProvider>
+    </BrowserRouter>
   )
 }

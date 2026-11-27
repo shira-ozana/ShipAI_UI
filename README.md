@@ -1,4 +1,4 @@
-# SDLC Studio – Chat UI
+# Ship AI – Chat UI
 
 Frontend for a multi-agent platform for the software development lifecycle. This is the chat
 interface only. By default it talks to the local **Generic Agent API** (a Python backend that
@@ -10,7 +10,7 @@ The product name is a placeholder. Rename it in [`src/lib/config.ts`](src/lib/co
 
 ## Stack
 
-- React 19 + Vite + TypeScript (strict)
+- React 19 + Vite + TypeScript (strict), React Router for the screens
 - Tailwind CSS v4 + shadcn/ui components, lucide-react icons
 - react-markdown + remark-gfm for assistant replies
 - ESLint (typescript-eslint, react-hooks) + Prettier
@@ -37,10 +37,12 @@ npm run dev        # http://localhost:5173
 
 Copy `.env.example` to `.env.local` if you need to change anything. Both variables are optional.
 
-| Variable        | Default | Meaning                                                                 |
-| --------------- | ------- | ----------------------------------------------------------------------- |
-| `VITE_API_URL`  | empty   | Base URL of the backend. Empty means the relative `/api/chat` URL.      |
-| `VITE_USE_MOCK` | empty   | `true` selects the mock service. Any other value uses the real backend. |
+| Variable                | Default | Meaning                                                                                           |
+| ----------------------- | ------- | ------------------------------------------------------------------------------------------------- |
+| `VITE_API_URL`          | empty   | Base URL of the backend. Empty means the relative `/api/chat` URL.                                |
+| `VITE_USE_MOCK`         | empty   | `true` selects the mock service. Any other value uses the real backend.                           |
+| `VITE_PLATFORM_API_URL` | empty   | Base URL of the platform backend (`/api/users`, `/api/repositories`). Leave empty in development. |
+| `VITE_AGENT_API_URL`    | empty   | Base URL of the Generic Agent API (`/api/init`). Defaults to `VITE_API_URL`.                      |
 
 Restart the dev server after changing them.
 
@@ -50,7 +52,8 @@ Restart the dev server after changing them.
    `curl http://127.0.0.1:8000/api/health` → `{"status":"ok"}`.
 2. Start the UI with `npm run dev` and open <http://localhost:5173>.
 
-`vite.config.ts` proxies `/api` **unchanged** to `http://127.0.0.1:8000` (for `npm run dev` and
+`vite.config.ts` proxies `/api/init` **unchanged** to the Generic Agent API on
+`http://127.0.0.1:3000`, and the rest of `/api` to `http://127.0.0.1:8000` (for `npm run dev` and
 `npm run preview`), so the browser only talks to the UI's own origin and no CORS setup is needed.
 No credentials live in this project; Cursor keys stay in the Python backend.
 
@@ -74,20 +77,28 @@ or add a Vercel rewrite that forwards `/api/*` to it.
 
 ```
 src/
-├── App.tsx                    # Wires useChat to the layout and chat components
+├── App.tsx                    # Router: the routes listed under "Repository onboarding"
+├── pages/                     # ChatPage, RegisterPage, AddRepositoryPage, RepositoryDetailsPage
 ├── components/
-│   ├── layout/                # ChatLayout (page shell), Header
+│   ├── layout/                # ChatLayout, PageLayout (page shells), Header
 │   ├── chat/                  # MessageList, MessageBubble, Markdown, CodeBlock,
 │   │                          # ChatInput, EmptyState, TypingIndicator
-│   └── ui/                    # shadcn/ui primitives (button, textarea)
-├── hooks/useChat.ts           # Messages, sending, streaming and stop logic
+│   ├── repository/            # RepositoryDetails (details + Init Repository button)
+│   └── ui/                    # shadcn/ui primitives (button, textarea, input, label, alert, form-field)
+├── hooks/
+│   ├── useChat.ts             # Messages, sending, streaming and stop logic
+│   └── useInitRepository.ts   # Explicit feature create + init run (no auto-start)
 ├── services/
 │   ├── chatService.ts         # ChatService interface (the contract)
 │   ├── apiChatService.ts      # Real implementation: POST /api/chat (default)
 │   ├── mockChatService.ts     # Mock implementation, only with VITE_USE_MOCK=true
-│   └── index.ts               # ← chooses which implementation the app uses
-├── types/chat.ts              # Message and StreamChunk types
-└── lib/                       # config (name, API URL), cn() helper
+│   ├── index.ts               # ← chooses which implementation the app uses
+│   ├── authService.ts         # /api/auth/*: current user, email-code sign-in, sign-out
+│   ├── userService.ts         # POST /api/users
+│   ├── repositoryService.ts   # POST /api/repositories
+│   └── initService.ts         # POST /api/features, POST /api/agents/init/run
+├── types/                     # chat.ts (Message, StreamChunk), repository.ts
+└── lib/                       # config, cn(), http (JSON client), validation
 ```
 
 Components are presentational. All chat state lives in `useChat`, which only knows the
@@ -128,3 +139,54 @@ interface ChatService {
 Implementations throw `ChatServiceError` (with a user-friendly message) for failures and let
 `AbortError` propagate when aborted. Setting `agent` on a chunk shows that agent's name as a small
 label above the reply.
+
+## Repository onboarding
+
+| Route               | Screen                                                               |
+| ------------------- | -------------------------------------------------------------------- |
+| `/`                 | Chat (unchanged)                                                     |
+| `/register`         | Register: first name, last name, email, ShipAI username              |
+| `/repositories/new` | Add Repository: repository URL, GitHub username, masked GitHub token |
+| `/repositories/:id` | Repository details with the explicit **Init Repository** button      |
+
+| Call                                        | Sent when                      | Notes                                                                                           |
+| ------------------------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `POST /api/users`                           | Register                       | `201` profile, `409` email or username in use                                                   |
+| `POST /api/repositories`                    | Add Repository                 | `github_password` is the token field. `201` returns `id`, then the UI opens `/repositories/:id` |
+| `POST /api/features` `{username, repo_url}` | Click on Init Repository, only (if no feature is already associated) | `201 {feature_id}`: created on the Platform Backend (port 8000). Retries reuse the same ID |
+| `POST /api/agents/init/run` `{feature_id, project:{repo_url}, dry_run:true}` | Click on Init Repository, only | Expected `202 {runId, status:"running"}`. Route is not in the local OpenAPI yet (live 404) |
+
+Registration, adding a repository and opening the details screen never start initialization.
+The token lives only in the Add Repository form and the request body; it is cleared on
+success and is not put in navigation state, storage or logs.
+
+### Sign-in and session
+
+The backend (`backend/app/auth.py`) issues an HttpOnly `shipai_session` cookie; the UI never sees
+or stores a token and learns who is signed in only from `GET /api/auth/me` (`AuthProvider`).
+
+- **New user:** `POST /api/users` (201) starts the session, then the UI confirms it with
+  `/api/auth/me` and opens Add Repository.
+- **Existing user:** `/sign-in` asks for a username or email; the backend emails a one-time code to
+  the address on the account, and `POST /api/auth/sign-in/verify` turns it into the cookie.
+  A username alone, or a registration `409`, never signs anyone in.
+- **Local development:** the backend must run with `AUTH_EMAIL_MODE=console` (the code is written to
+  the backend log, never to the HTTP response) or `AUTH_EMAIL_MODE=smtp` with `SMTP_*` set.
+  The default `disabled` makes sign-in for existing accounts return 503.
+- Keep `VITE_PLATFORM_API_URL` empty so the cookie stays same-origin through the Vite proxy.
+
+### Backend gaps (as of this version)
+
+These contracts do not exist in `backend/` or `shipAI_Generic_Agent/`, so the UI handles them
+explicitly instead of faking them:
+
+- **Repository lookup.** There is no `GET /api/repositories/{id}`. The details screen uses the
+  creation response passed in navigation state (it survives a reload; a direct visit shows an
+  explanation).
+- **Ownership checks.** `/api/repositories` now requires the session and checks `username` against
+  it. `/api/features` and `/api/tasks` still do not check who is calling.
+- **Init agent run.** `POST /api/agents/init/run` is not in the local Platform Backend OpenAPI yet
+  (live requests return 404). The UI still posts the documented payload and treats `202` as
+  started only. There is no verified status endpoint for that run id, so completion is not claimed.
+  The older Generic Agent `GET /api/init/{runId}` is not reused.
+- **CORS.** `backend/` allows only `http://localhost:4200`, so use the Vite proxy in development.
